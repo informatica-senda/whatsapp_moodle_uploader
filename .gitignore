@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.api.example
+build/
+dist/
+*.spec
+Subida alumnos moodle.csv
