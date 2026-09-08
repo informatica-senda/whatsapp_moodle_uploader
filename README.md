@@ -1,3 +1,33 @@
+# API Moodle multicurso v2
+
+La sincronización autoritativa se realiza desde el plugin Moodle por HTTPS. Mantener el puerto PostgreSQL privado.
+Aplicar `migrations/001_inspect.sql` (solo lectura) y después `migrations/002_multicourse.sql` en pruebas antes del despliegue.
+La guía coordinada está en `local/enviarmensaje/integration/MULTICURSO.md` del plugin.
+
+Arranque: `uvicorn api_service:app --host 0.0.0.0 --port 8000`. Python 3.12; Dockerfile actualizado.
+Conservar `SENDA_POSTGRES_URL` y `SENDA_INTEGRATION_TOKEN` en EasyPanel; no incluir sus valores en archivos versionados.
+
+Endpoints privados, todos con `Authorization: Bearer`:
+
+- `GET /v2/health`: conexión y disponibilidad del esquema v2.
+- `POST /v2/accounts/snapshot`: cuenta verificada por Moodle y lista completa de matrículas gestionadas.
+- `POST /v2/accounts/credential-candidates`: candidatas antiguas exclusivamente para que Moodle las valide; no para el agente.
+- `POST /v2/course-access/lookup`: plataforma, `moodle_user_id`, `moodle_course_id`, `include_upcoming` opcional.
+- `POST /v2/welcome-links`: relaciona `message_id`, `access_id` y teléfono tras un envío confirmado.
+
+Los modelos de petición están en `multicourse.py` y el contrato se publica en `/openapi.json`.
+La API conserva `GET /health` público y `/v1/health` privado. La escritura v1 responde 409 para exigir actualizar Moodle.
+La consulta v1 admite solo matrículas activas verificadas y responde 409 si un nombre identifica varias.
+
+`course_access` conserva el histórico y su forma anterior, con nuevas columnas de relación. Las filas heredadas no se
+suponen activas. `current_course_access` filtra el estado a partir de la sincronización Moodle y las ventanas de matrícula.
+El programa de escritorio conserva su interfaz y utilidades, pero su botón de subir a PostgreSQL indica usar Moodle.
+
+Pruebas: instalar `requirements-dev.txt`; instalar `@electric-sql/pglite` en un directorio de pruebas y definir
+`PGLITE_MODULE` con su ruta absoluta. Ejecutar `python tests/test_multicourse.py`. No usa registros ni servicios reales.
+
+## Documentación anterior (flujo v1, sustituido para sincronización)
+
 # Senda - Moodle → PostgreSQL → WhatsApp
 
 Aplicación de escritorio para cargar el fichero de alta de Moodle (CSV/XLSX), normalizar los datos, insertar las matrículas en `public.course_access` y enviar la plantilla de WhatsApp de forma masiva.

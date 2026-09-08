@@ -10,9 +10,18 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_catalog import COURSE_MAP
+from multicourse import create_router
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 
-app = FastAPI(title="Senda Moodle Integration", version="1.0.0")
+app = FastAPI(title="Senda Moodle Integration", version="2.0.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    # FastAPI's default error body can echo a password supplied in the request.
+    return JSONResponse(status_code=422, content={'detail': 'Invalid integration payload'})
 
 
 class CourseAccessUpsert(BaseModel):
@@ -136,77 +145,7 @@ def authenticated_health():
     dependencies=[Depends(require_token)],
 )
 def upsert_course_access(payload: CourseAccessUpsert):
-    course_name = canonical_course(payload.course_code, payload.course_name)
-    phone = normalize_phone(payload.phone)
-    with database() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1
-                  FROM public.course_access
-                 WHERE username = %s AND course_name = %s
-                   AND start_date = %s AND end_date = %s
-                 LIMIT 1
-                """,
-                (payload.username, course_name, payload.start_date, payload.end_date),
-            )
-            exists = cur.fetchone() is not None
-
-            if exists:
-                cur.execute(
-                    """
-                    UPDATE public.course_access
-                       SET external_id = %s, phone = %s, password = %s,
-                           firstname = %s, lastname = %s, email = %s, dni = %s,
-                           access_url = %s, platform = %s, updated_at = NOW()
-                     WHERE username = %s AND course_name = %s
-                       AND start_date = %s AND end_date = %s
-                    """,
-                    (
-                        payload.external_id,
-                        phone,
-                        payload.password,
-                        payload.firstname,
-                        payload.lastname,
-                        payload.email,
-                        payload.dni,
-                        payload.access_url,
-                        payload.platform,
-                        payload.username,
-                        course_name,
-                        payload.start_date,
-                        payload.end_date,
-                    ),
-                )
-                action = "updated"
-            else:
-                cur.execute(
-                    """
-                    INSERT INTO public.course_access (
-                        external_id, phone, username, password, firstname, lastname,
-                        email, dni, course_name, start_date, end_date, access_url,
-                        platform, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                    """,
-                    (
-                        payload.external_id,
-                        phone,
-                        payload.username,
-                        payload.password,
-                        payload.firstname,
-                        payload.lastname,
-                        payload.email,
-                        payload.dni,
-                        course_name,
-                        payload.start_date,
-                        payload.end_date,
-                        payload.access_url,
-                        payload.platform,
-                    ),
-                )
-                action = "inserted"
-
-    return SyncResult(action=action, course_name=course_name)
+    raise HTTPException(status_code=409, detail="Upgrade Moodle: use /v2/accounts/snapshot")
 
 
 @app.post(
@@ -224,15 +163,21 @@ def lookup_course_access(payload: CourseAccessLookup):
                 """
                 SELECT external_id, phone, username, password, firstname, lastname,
                        email, dni, course_name, start_date, end_date, access_url, platform
-                  FROM public.course_access
+                  FROM public.current_course_access
                  WHERE username = %s AND course_name = %s
-                 ORDER BY end_date DESC NULLS LAST, updated_at DESC
-                 LIMIT 1
+                   AND access_state = 'active' AND credentials_available
+                 LIMIT 2
                 """,
                 (payload.username, payload.course_name),
             )
-            record = cur.fetchone()
+            records = cur.fetchall()
+            if len(records) > 1:
+                raise HTTPException(status_code=409, detail="Ambiguous course; use v2 lookup")
+            record = records[0] if records else None
 
     if not record:
         raise HTTPException(status_code=404, detail="Course access not found")
     return AccessResult(**record)
+
+
+app.include_router(create_router(database, require_token, canonical_course, normalize_phone))

@@ -338,60 +338,7 @@ class App(tk.Tk):
         return valid
 
     def upload_db(self):
-        if not self.rows:
-            raise ValueError("Carga primero el fichero Moodle.")
-        url = self.pg_url.get().strip()
-        if not url:
-            raise ValueError("Pega la URL externa de PostgreSQL de EasyPanel.")
-
-        valid = self.valid_rows_for_action(False)
-        if not valid:
-            raise ValueError("No hay filas válidas para subir.")
-
-        self.status_text.set(f"Subiendo {len(valid)} alumnos a PostgreSQL…")
-        inserted = skipped = failed = 0
-        with psycopg.connect(url, connect_timeout=15) as conn:
-            with conn.cursor() as cur:
-                for r in valid:
-                    try:
-                        # Evita repetir exactamente la misma matrícula, pero permite que una persona tenga varios cursos.
-                        cur.execute(
-                            """
-                            SELECT 1 FROM public.course_access
-                            WHERE username = %s AND course_name = %s AND start_date = %s AND end_date = %s
-                            LIMIT 1
-                            """,
-                            (r["username"], r["course_name"], r["start_date"], r["end_date"])
-                        )
-                        if cur.fetchone():
-                            r["status_db"] = "Ya existía"
-                            skipped += 1
-                            continue
-
-                        cur.execute(
-                            """
-                            INSERT INTO public.course_access (
-                                external_id, phone, username, password, firstname, lastname, email, dni,
-                                course_name, start_date, end_date, access_url, platform, created_at, updated_at
-                            ) VALUES (
-                                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW()
-                            )
-                            """,
-                            (r["external_id"], r["phone"], r["username"], r["password"], r["firstname"],
-                             r["lastname"], r["email"], r["dni"], r["course_name"], r["start_date"],
-                             r["end_date"], r["access_url"], r["platform"])
-                        )
-                        r["status_db"] = "Subido"
-                        inserted += 1
-                    except Exception as exc:
-                        conn.rollback()
-                        r["status_db"] = "ERROR"
-                        r["errors"].append(f"DB: {exc}")
-                        failed += 1
-                    else:
-                        conn.commit()
-        self.after(0, self.refresh_tree)
-        self.status_text.set(f"PostgreSQL: {inserted} subidos, {skipped} ya existían, {failed} errores.")
+        raise ValueError("La sincronización se realiza desde Moodle > Subir usuarios y preparar WhatsApp. El cargador de escritorio no puede verificar matrículas ni contraseñas actuales.")
 
     def send_whatsapp(self):
         if not self.rows:

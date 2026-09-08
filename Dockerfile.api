@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
-COPY api_service.py course_catalog.py ./
+COPY api_service.py course_catalog.py multicourse.py ./
 
 EXPOSE 8000
 
