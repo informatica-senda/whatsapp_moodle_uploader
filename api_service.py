@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
-app = FastAPI(title="Senda Moodle Integration", version="2.1.1")
+app = FastAPI(title="Senda Moodle Integration", version="2.1.2")
 
 
 @app.exception_handler(RequestValidationError)

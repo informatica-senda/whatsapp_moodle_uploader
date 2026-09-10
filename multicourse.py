@@ -91,7 +91,7 @@ class CourseActivity(BaseModel):
 class CourseSection(BaseModel):
     moodle_section_id: int = Field(gt=0)
     section_number: int = Field(ge=0)
-    section_name: str = Field(min_length=1, max_length=500)
+    section_name: str = Field(default='', max_length=500)
     summary: str = Field(default='', max_length=2501)
     activities: list[CourseActivity] = Field(default_factory=list, max_length=100)
 
@@ -262,13 +262,15 @@ def create_router(database, require_token, canonical_course, normalize_phone):
             conn.execute('UPDATE public.course_context_sections SET enabled=false WHERE course_context_id=%s',
                          (contextid,))
             for section in p.sections:
+                section_name = section.section_name.strip() or (
+                    'General' if section.section_number == 0 else f'Sección {section.section_number}')
                 conn.execute('''INSERT INTO public.course_context_sections
                     (course_context_id,moodle_section_id,section_number,section_name,summary,activities,enabled)
                     VALUES (%s,%s,%s,%s,%s,%s,true)
                     ON CONFLICT(course_context_id,moodle_section_id) DO UPDATE SET
                      section_number=excluded.section_number,section_name=excluded.section_name,
                      summary=excluded.summary,activities=excluded.activities,enabled=true''',
-                    (contextid,section.moodle_section_id,section.section_number,section.section_name,
+                    (contextid,section.moodle_section_id,section.section_number,section_name,
                      section.summary,Jsonb([a.model_dump() for a in section.activities])))
         return {'status': 'ok', 'changed': not unchanged, 'sections': len(p.sections)}
 
