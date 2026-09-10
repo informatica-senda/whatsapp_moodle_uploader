@@ -18,6 +18,8 @@ Endpoints privados, todos con `Authorization: Bearer`:
 - `POST /v2/course-contexts/snapshot`: descripción, objetivos, metodología, secciones y actividades extraídas por Moodle.
 
 Los modelos de petición están en `multicourse.py` y el contrato se publica en `/openapi.json`.
+El catálogo autenticado que envía Moodle es la fuente de nombres y códigos; añadir un curso al plugin no requiere modificar
+una segunda lista dentro de la API.
 La API conserva `GET /health` público y `/v1/health` privado. La escritura v1 responde 409 para exigir actualizar Moodle.
 La consulta v1 admite solo matrículas activas verificadas y responde 409 si un nombre identifica varias.
 

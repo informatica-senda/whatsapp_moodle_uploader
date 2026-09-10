@@ -138,8 +138,6 @@ def create_router(database, require_token, canonical_course, normalize_phone):
     @router.post('/accounts/snapshot')
     def snapshot(p: Snapshot):
         phone = normalize_phone(p.phone) if p.phone else ''
-        for course in p.courses:
-            canonical_course(course.course_code, course.course_name)
         if p.observed_at > datetime.now(timezone.utc):
             # Allow ordinary clock skew, but never allow a far-future snapshot to freeze updates.
             if (p.observed_at - datetime.now(timezone.utc)).total_seconds() > 300:
@@ -232,7 +230,6 @@ def create_router(database, require_token, canonical_course, normalize_phone):
 
     @router.post('/course-contexts/snapshot')
     def course_context_snapshot(p: CourseContextSnapshot):
-        canonical_course(p.course_code, p.course_name)
         if p.observed_at > datetime.now(timezone.utc) and (
                 p.observed_at - datetime.now(timezone.utc)).total_seconds() > 300:
             raise HTTPException(422, 'Snapshot clock is ahead')

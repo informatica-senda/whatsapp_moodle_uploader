@@ -176,8 +176,10 @@ class MulticourseTest(unittest.TestCase):
             self.pg.run('DROP INDEX synthetic_legacy_username')
 
     def test_catalogue_and_token(self):
-        self.payload['courses'][0]['course_name']='Unmapped'
-        with self.assertRaises(HTTPException): self.sync()
+        # The authenticated Moodle catalogue is authoritative for new courses.
+        self.payload['courses'][0]['course_code']='NEW-COURSE-900'
+        self.payload['courses'][0]['course_name']='Curso nuevo gestionado en Moodle'
+        self.assertEqual(self.sync()['inserted'],2)
         os.environ['SENDA_INTEGRATION_TOKEN']='synthetic-test-token'
         with self.assertRaises(HTTPException): require_token('Bearer wrong')
         require_token('Bearer synthetic-test-token')

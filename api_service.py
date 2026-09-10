@@ -15,13 +15,18 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
-app = FastAPI(title="Senda Moodle Integration", version="2.1.0")
+app = FastAPI(title="Senda Moodle Integration", version="2.1.1")
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request, exc):
     # FastAPI's default error body can echo a password supplied in the request.
-    return JSONResponse(status_code=422, content={'detail': 'Invalid integration payload'})
+    safe = []
+    for error in exc.errors():
+        location = '.'.join(str(part) for part in error.get('loc', ()) if part != 'body')
+        safe.append({'field': location or 'request', 'message': error.get('msg', 'Invalid value'),
+                     'type': error.get('type', 'validation_error')})
+    return JSONResponse(status_code=422, content={'detail': safe or 'Invalid integration payload'})
 
 
 class CourseAccessUpsert(BaseModel):
