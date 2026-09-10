@@ -1,7 +1,8 @@
 # API Moodle multicurso v2
 
 La sincronización autoritativa se realiza desde el plugin Moodle por HTTPS. Mantener el puerto PostgreSQL privado.
-Aplicar `migrations/001_inspect.sql` (solo lectura) y después `migrations/002_multicourse.sql` en pruebas antes del despliegue.
+Aplicar `migrations/001_inspect.sql` (solo lectura), `migrations/002_multicourse.sql` y
+`migrations/003_course_context.sql` en pruebas antes del despliegue.
 La guía coordinada está en `local/enviarmensaje/integration/MULTICURSO.md` del plugin.
 
 Arranque: `uvicorn api_service:app --host 0.0.0.0 --port 8000`. Python 3.12; Dockerfile actualizado.
@@ -14,6 +15,7 @@ Endpoints privados, todos con `Authorization: Bearer`:
 - `POST /v2/accounts/credential-candidates`: candidatas antiguas exclusivamente para que Moodle las valide; no para el agente.
 - `POST /v2/course-access/lookup`: plataforma, `moodle_user_id`, `moodle_course_id`, `include_upcoming` opcional.
 - `POST /v2/welcome-links`: relaciona `message_id`, `access_id` y teléfono tras un envío confirmado.
+- `POST /v2/course-contexts/snapshot`: descripción, objetivos, metodología, secciones y actividades extraídas por Moodle.
 
 Los modelos de petición están en `multicourse.py` y el contrato se publica en `/openapi.json`.
 La API conserva `GET /health` público y `/v1/health` privado. La escritura v1 responde 409 para exigir actualizar Moodle.

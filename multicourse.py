@@ -81,6 +81,50 @@ class CredentialCandidates(BaseModel):
     phone: str
 
 
+class CourseActivity(BaseModel):
+    module: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=500)
+    completion: str = Field(default='', max_length=500)
+    description: str = Field(default='', max_length=1501)
+
+
+class CourseSection(BaseModel):
+    moodle_section_id: int = Field(gt=0)
+    section_number: int = Field(ge=0)
+    section_name: str = Field(min_length=1, max_length=500)
+    summary: str = Field(default='', max_length=2501)
+    activities: list[CourseActivity] = Field(default_factory=list, max_length=100)
+
+
+class CourseContextSnapshot(BaseModel):
+    platform: str = Field(min_length=1, max_length=255)
+    moodle_course_id: int = Field(gt=0)
+    course_code: str = Field(min_length=1, max_length=255)
+    course_name: str = Field(min_length=1, max_length=500)
+    summary: str = Field(default='', max_length=8001)
+    objectives: str = Field(default='', max_length=8000)
+    methodology: str = Field(default='', max_length=8000)
+    audience: str = Field(default='', max_length=8000)
+    completion_info: str = Field(default='', max_length=8000)
+    assessment_info: str = Field(default='', max_length=8000)
+    support_notes: str = Field(default='', max_length=8000)
+    hours: str = Field(default='', max_length=100)
+    source_url: str = Field(default='', max_length=2048)
+    content_hash: str = Field(min_length=64, max_length=64)
+    enabled: bool = True
+    observed_at: datetime
+    sections: list[CourseSection] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode='after')
+    def valid_context(self):
+        ids = [s.moodle_section_id for s in self.sections]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Duplicate course section')
+        if self.observed_at.tzinfo is None:
+            raise ValueError('Timezone required')
+        return self
+
+
 def create_router(database, require_token, canonical_course, normalize_phone):
     router = APIRouter(prefix='/v2', dependencies=[Depends(require_token)])
 
@@ -88,7 +132,8 @@ def create_router(database, require_token, canonical_course, normalize_phone):
     def health():
         with database() as conn:
             conn.execute('SELECT access_id FROM public.current_course_access LIMIT 0')
-        return {'status': 'ok', 'version': 2}
+            conn.execute('SELECT course_context_id FROM public.current_course_context LIMIT 0')
+        return {'status': 'ok', 'version': 2, 'course_context': 1}
 
     @router.post('/accounts/snapshot')
     def snapshot(p: Snapshot):
@@ -184,5 +229,50 @@ def create_router(database, require_token, canonical_course, normalize_phone):
             conn.execute('INSERT INTO public.wa_welcome_links(message_id,access_id,phone) VALUES (%s,%s,%s) ON CONFLICT(message_id) DO NOTHING',
                          (p.message_id,p.access_id,phone))
         return {'status': 'ok'}
+
+    @router.post('/course-contexts/snapshot')
+    def course_context_snapshot(p: CourseContextSnapshot):
+        canonical_course(p.course_code, p.course_name)
+        if p.observed_at > datetime.now(timezone.utc) and (
+                p.observed_at - datetime.now(timezone.utc)).total_seconds() > 300:
+            raise HTTPException(422, 'Snapshot clock is ahead')
+        with database() as conn:
+            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+                         (f'course-context:{p.platform}:{p.moodle_course_id}',))
+            previous = conn.execute('''SELECT observed_at,content_hash FROM public.course_contexts
+                WHERE platform=%s AND moodle_course_id=%s FOR UPDATE''',
+                (p.platform, p.moodle_course_id)).fetchone()
+            if previous and previous['observed_at'] > p.observed_at:
+                raise HTTPException(409, 'Stale course context; retry with current Moodle state')
+            unchanged = bool(previous and previous['content_hash'] == p.content_hash)
+            context = conn.execute('''INSERT INTO public.course_contexts
+                (platform,moodle_course_id,course_code,course_name,summary,objectives,methodology,
+                 audience,completion_info,assessment_info,support_notes,hours,source_url,content_hash,
+                 enabled,observed_at,synced_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
+                ON CONFLICT(platform,moodle_course_id) DO UPDATE SET
+                 course_code=excluded.course_code,course_name=excluded.course_name,
+                 summary=excluded.summary,objectives=excluded.objectives,methodology=excluded.methodology,
+                 audience=excluded.audience,completion_info=excluded.completion_info,
+                 assessment_info=excluded.assessment_info,support_notes=excluded.support_notes,
+                 hours=excluded.hours,source_url=excluded.source_url,content_hash=excluded.content_hash,
+                 enabled=excluded.enabled,observed_at=excluded.observed_at,synced_at=now()
+                RETURNING id''',
+                (p.platform,p.moodle_course_id,p.course_code.upper(),p.course_name,p.summary,p.objectives,
+                 p.methodology,p.audience,p.completion_info,p.assessment_info,p.support_notes,p.hours,
+                 p.source_url,p.content_hash,p.enabled,p.observed_at)).fetchone()
+            contextid = context['id']
+            conn.execute('UPDATE public.course_context_sections SET enabled=false WHERE course_context_id=%s',
+                         (contextid,))
+            for section in p.sections:
+                conn.execute('''INSERT INTO public.course_context_sections
+                    (course_context_id,moodle_section_id,section_number,section_name,summary,activities,enabled)
+                    VALUES (%s,%s,%s,%s,%s,%s,true)
+                    ON CONFLICT(course_context_id,moodle_section_id) DO UPDATE SET
+                     section_number=excluded.section_number,section_name=excluded.section_name,
+                     summary=excluded.summary,activities=excluded.activities,enabled=true''',
+                    (contextid,section.moodle_section_id,section.section_number,section.section_name,
+                     section.summary,Jsonb([a.model_dump() for a in section.activities])))
+        return {'status': 'ok', 'changed': not unchanged, 'sections': len(p.sections)}
 
     return router

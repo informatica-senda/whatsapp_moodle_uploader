@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from api_service import canonical_course, normalize_phone, require_token
-from multicourse import create_router, Snapshot, Lookup, CredentialCandidates
+from multicourse import (create_router, Snapshot, Lookup, CredentialCandidates,
+                         CourseContextSnapshot)
 from fastapi import HTTPException
 
 
@@ -73,6 +74,9 @@ class MulticourseTest(unittest.TestCase):
         migration=(ROOT/'migrations/002_multicourse.sql').read_text()
         cls.pg.run(migration,script=True)
         cls.pg.run(migration,script=True)
+        contextmigration=(ROOT/'migrations/003_course_context.sql').read_text()
+        cls.pg.run(contextmigration,script=True)
+        cls.pg.run(contextmigration,script=True)
         router=create_router(cls.pg.transaction,lambda:None,canonical_course,normalize_phone)
         cls.endpoints={r.path:r.endpoint for r in router.routes}
 
@@ -177,6 +181,30 @@ class MulticourseTest(unittest.TestCase):
         os.environ['SENDA_INTEGRATION_TOKEN']='synthetic-test-token'
         with self.assertRaises(HTTPException): require_token('Bearer wrong')
         require_token('Bearer synthetic-test-token')
+
+    def test_course_context_snapshot_replaces_structure_without_deleting_history(self):
+        now=datetime.now(timezone.utc)
+        payload={'platform':'moodle_senda','moodle_course_id':344,'course_code':'GEM-SENSI-344',
+            'course_name':'Sensibilización en Igualdad','summary':'Resumen','objectives':'Objetivos',
+            'methodology':'Vídeos por unidad','audience':'Plantilla','completion_info':'Completar vídeos',
+            'assessment_info':'Cuestionario','support_notes':'Ayuda específica','hours':'5',
+            'source_url':'https://example.invalid/course/344','content_hash':'a'*64,'enabled':True,
+            'observed_at':now,'sections':[{'moodle_section_id':10,'section_number':1,
+                'section_name':'Unidad 1','summary':'Introducción','activities':[
+                    {'module':'url','name':'Vídeo 1','completion':'Automática'}]}]}
+        endpoint=self.endpoints['/v2/course-contexts/snapshot']
+        first=endpoint(CourseContextSnapshot(**payload))
+        self.assertTrue(first['changed'])
+        payload['content_hash']='b'*64
+        payload['observed_at']=datetime.now(timezone.utc)
+        payload['sections']=[{'moodle_section_id':11,'section_number':2,
+            'section_name':'Unidad 2','activities':[]}]
+        endpoint(CourseContextSnapshot(**payload))
+        current=self.pg.run('SELECT * FROM public.current_course_context WHERE moodle_course_id=344')[0]
+        self.assertEqual(current['methodology'],'Vídeos por unidad')
+        sections=current['sections'] if isinstance(current['sections'],list) else json.loads(current['sections'])
+        self.assertEqual([s['section_name'] for s in sections],['Unidad 2'])
+        self.assertEqual(self.pg.run('SELECT count(*) AS n FROM public.course_context_sections')[0]['n'],2)
 
     def test_http_contract_and_validation_redaction(self):
         from fastapi import FastAPI
