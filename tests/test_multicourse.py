@@ -191,12 +191,14 @@ class MulticourseTest(unittest.TestCase):
             'methodology':'Vídeos por unidad','audience':'Plantilla','completion_info':'Completar vídeos',
             'assessment_info':'Cuestionario','support_notes':'Ayuda específica','hours':'5',
             'source_url':'https://example.invalid/course/344','content_hash':'a'*64,'enabled':True,
-            'observed_at':now,'sections':[{'moodle_section_id':10,'section_number':1,
-                'section_name':'Unidad 1','summary':'Introducción','activities':[
+            'observed_at':now,'sections':[{'moodle_section_id':10,'section_number':0,
+                'section_name':'','summary':'Introducción','activities':[
                     {'module':'url','name':'Vídeo 1','completion':'Automática'}]}]}
         endpoint=self.endpoints['/v2/course-contexts/snapshot']
         first=endpoint(CourseContextSnapshot(**payload))
         self.assertTrue(first['changed'])
+        initial=self.pg.run('SELECT section_name FROM public.course_context_sections WHERE moodle_section_id=10')[0]
+        self.assertEqual(initial['section_name'],'General')
         payload['content_hash']='b'*64
         payload['observed_at']=datetime.now(timezone.utc)
         payload['sections']=[{'moodle_section_id':11,'section_number':2,
