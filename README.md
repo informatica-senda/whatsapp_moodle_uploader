@@ -1,9 +1,68 @@
 # API Moodle multicurso v2
 
 La sincronización autoritativa se realiza desde el plugin Moodle por HTTPS. Mantener el puerto PostgreSQL privado.
-Aplicar `migrations/001_inspect.sql` (solo lectura), `migrations/002_multicourse.sql` y
-`migrations/003_course_context.sql` en pruebas antes del despliegue.
+Aplicar `migrations/001_inspect.sql` (solo lectura) y las migraciones necesarias en la base de pruebas antes de habilitar
+la API. No apuntar las pruebas a producción.
 La guía coordinada está en `local/enviarmensaje/integration/MULTICURSO.md` del plugin.
+
+## Preparar el esquema de datos por grupo en staging
+
+`migrations/004_user_group_data.sql` crea únicamente `public.user_group_data` y su índice. No modifica
+`course_access`, las tablas de WhatsApp ni las de contexto. La migración no copia datos de Moodle y la tabla debe
+quedar vacía hasta que se active posteriormente la sincronización desde Moodle. La API no ejecuta migraciones al arrancar.
+
+Aplicar el archivo desde una consola del servicio/API de pruebas que tenga configurada su propia variable
+`SENDA_POSTGRES_URL`. Antes de ejecutar DDL, confirmar que la URL corresponde a la base de staging:
+
+```sh
+psql "$SENDA_POSTGRES_URL" -X -v ON_ERROR_STOP=1 -c "SELECT current_database(), current_user;"
+```
+
+Continuar solo si la base devuelta es la base de pruebas esperada. Aplicar la migración desde la raíz del repositorio:
+
+```sh
+psql "$SENDA_POSTGRES_URL" -X -v ON_ERROR_STOP=1 -f migrations/004_user_group_data.sql
+```
+
+Se puede repetir: la creación de la tabla y el índice usa `IF NOT EXISTS`. La migración debe ejecutarse con el usuario
+PostgreSQL de la API para que este sea propietario de la secuencia y la tabla. Si se aplica con un usuario DBA distinto,
+conceder al usuario configurado en `SENDA_POSTGRES_URL` `SELECT`, `INSERT`, `UPDATE` y `DELETE` sobre la tabla, además
+de `USAGE` y `SELECT` sobre `public.user_group_data_id_seq`.
+
+Comprobar columnas y tipos:
+
+```sql
+SELECT column_name, data_type, is_nullable
+  FROM information_schema.columns
+ WHERE table_schema = 'public' AND table_name = 'user_group_data'
+ ORDER BY ordinal_position;
+```
+
+Comprobar la clave única y el índice:
+
+```sql
+SELECT conname, pg_get_constraintdef(oid)
+  FROM pg_constraint
+ WHERE conrelid = 'public.user_group_data'::regclass;
+
+SELECT indexname, indexdef
+  FROM pg_indexes
+ WHERE schemaname = 'public' AND tablename = 'user_group_data';
+```
+
+Comprobar que aún no se han cargado alumnos y que el rol de la API tiene los permisos necesarios:
+
+```sql
+SELECT count(*) AS rows_expected_zero FROM public.user_group_data;
+SELECT has_table_privilege(current_user, 'public.user_group_data', 'SELECT') AS can_select,
+       has_table_privilege(current_user, 'public.user_group_data', 'INSERT') AS can_insert,
+       has_table_privilege(current_user, 'public.user_group_data', 'UPDATE') AS can_update,
+       has_table_privilege(current_user, 'public.user_group_data', 'DELETE') AS can_delete,
+       has_sequence_privilege(current_user, 'public.user_group_data_id_seq', 'USAGE') AS can_use_id_sequence;
+```
+
+Si la estructura existente no coincide, detenerse y revisar el estado antes de aplicar cambios manuales o eliminar objetos.
+No usar la URL, token ni base de producción para este procedimiento.
 
 Arranque: `uvicorn api_service:app --host 0.0.0.0 --port 8000`. Python 3.12; Dockerfile actualizado.
 Conservar `SENDA_POSTGRES_URL` y `SENDA_INTEGRATION_TOKEN` en EasyPanel; no incluir sus valores en archivos versionados.
@@ -16,6 +75,8 @@ Endpoints privados, todos con `Authorization: Bearer`:
 - `POST /v2/course-access/lookup`: plataforma, `moodle_user_id`, `moodle_course_id`, `include_upcoming` opcional.
 - `POST /v2/welcome-links`: relaciona `message_id`, `access_id` y teléfono tras un envío confirmado.
 - `POST /v2/course-contexts/snapshot`: descripción, objetivos, metodología, secciones y actividades extraídas por Moodle.
+- `POST /v2/user-group-data/snapshots`: lote idempotente por plataforma, alumno y código de grupo; solo revisiones iguales o superiores reemplazan la fila.
+- `DELETE /v2/user-group-data/{platform}/{moodle_user_id}`: elimina la réplica por alumno tras una solicitud aprobada de privacidad.
 
 Los modelos de petición están en `multicourse.py` y el contrato se publica en `/openapi.json`.
 El catálogo autenticado que envía Moodle es la fuente de nombres y códigos; añadir un curso al plugin no requiere modificar

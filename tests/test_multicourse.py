@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from api_service import canonical_course, normalize_phone, require_token
 from multicourse import (create_router, Snapshot, Lookup, CredentialCandidates,
-                         CourseContextSnapshot)
+                         CourseContextSnapshot, UserGroupBatch)
 from fastapi import HTTPException
 
 
@@ -77,6 +77,9 @@ class MulticourseTest(unittest.TestCase):
         contextmigration=(ROOT/'migrations/003_course_context.sql').read_text()
         cls.pg.run(contextmigration,script=True)
         cls.pg.run(contextmigration,script=True)
+        groupmigration=(ROOT/'migrations/004_user_group_data.sql').read_text()
+        cls.pg.run(groupmigration,script=True)
+        cls.pg.run(groupmigration,script=True)
         router=create_router(cls.pg.transaction,lambda:None,canonical_course,normalize_phone)
         cls.endpoints={r.path:r.endpoint for r in router.routes}
 
@@ -84,7 +87,7 @@ class MulticourseTest(unittest.TestCase):
     def tearDownClass(cls): cls.pg.close()
 
     def setUp(self):
-        self.pg.run('TRUNCATE public.wa_welcome_links,public.course_access,public.campus_accounts RESTART IDENTITY CASCADE')
+        self.pg.run('TRUNCATE public.user_group_data,public.wa_welcome_links,public.course_access,public.campus_accounts RESTART IDENTITY CASCADE')
         now=datetime.now(timezone.utc)
         self.payload={'platform':'moodle_senda','moodle_user_id':123,'username':'synthetic-user','phone':'612000000',
             'dni':'SYNTHETIC','firstname':'Test','lastname':'User','email':'test@example.invalid','enabled':True,
@@ -183,6 +186,33 @@ class MulticourseTest(unittest.TestCase):
         os.environ['SENDA_INTEGRATION_TOKEN']='synthetic-test-token'
         with self.assertRaises(HTTPException): require_token('Bearer wrong')
         require_token('Bearer synthetic-test-token')
+
+    def test_user_group_data_revision_is_idempotent_and_stale_is_ignored(self):
+        endpoint=self.endpoints['/v2/user-group-data/snapshots']
+        now=datetime.now(timezone.utc)
+        record={'platform':'moodle_senda','moodle_user_id':123,'group_key':'2026 - 02113/26002',
+            'revision':1,'username':'synthetic-user','dni':'ID-1','empresa':'Empresa A','cif':'CIF-1',
+            'inicio':'01/01/2026','fin':'31/12/2026','nombrecompleto':'Nombre Alumno',
+            'group_id':42,'course_id':344,'observed_at':now}
+        payload=UserGroupBatch(records=[record])
+        self.assertEqual(endpoint(payload),{'inserted':1,'updated':0,'stale':0})
+        self.assertEqual(endpoint(payload),{'inserted':0,'updated':1,'stale':0})
+        newer=dict(record,revision=3,empresa='Empresa B',observed_at=now+timedelta(seconds=1))
+        self.assertEqual(endpoint(UserGroupBatch(records=[newer]))['updated'],1)
+        older=dict(record,revision=2,empresa='Empresa Antigua')
+        self.assertEqual(endpoint(UserGroupBatch(records=[older]))['stale'],1)
+        rows=self.pg.run('SELECT * FROM public.user_group_data')
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['empresa'],'Empresa B')
+
+    def test_user_group_data_delete_is_idempotent(self):
+        endpoint=self.endpoints['/v2/user-group-data/snapshots']
+        record={'platform':'moodle_senda','moodle_user_id':123,'group_key':'2026 - 02113/26002',
+            'revision':1,'observed_at':datetime.now(timezone.utc)}
+        endpoint(UserGroupBatch(records=[record]))
+        delete=self.endpoints['/v2/user-group-data/{platform}/{moodle_user_id}']
+        self.assertEqual(delete('moodle_senda',123),{'deleted':1})
+        self.assertEqual(delete('moodle_senda',123),{'deleted':0})
 
     def test_course_context_snapshot_replaces_structure_without_deleting_history(self):
         now=datetime.now(timezone.utc)
