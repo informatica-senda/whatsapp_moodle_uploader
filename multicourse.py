@@ -125,6 +125,33 @@ class CourseContextSnapshot(BaseModel):
         return self
 
 
+class UserGroupRecord(BaseModel):
+    platform: str = Field(min_length=1, max_length=255)
+    moodle_user_id: int = Field(gt=0)
+    group_key: str = Field(min_length=1, max_length=100)
+    revision: int = Field(ge=1)
+    username: str = Field(default='', max_length=255)
+    dni: str = Field(default='', max_length=100)
+    empresa: str = Field(default='', max_length=255)
+    cif: str = Field(default='', max_length=100)
+    inicio: str = Field(default='', max_length=40)
+    fin: str = Field(default='', max_length=40)
+    nombrecompleto: str = Field(default='', max_length=255)
+    group_id: int | None = None
+    course_id: int | None = None
+    observed_at: datetime
+
+    @model_validator(mode='after')
+    def valid_observed_at(self):
+        if self.observed_at.tzinfo is None:
+            raise ValueError('Timezone required')
+        return self
+
+
+class UserGroupBatch(BaseModel):
+    records: list[UserGroupRecord] = Field(min_length=1, max_length=100)
+
+
 def create_router(database, require_token, canonical_course, normalize_phone):
     router = APIRouter(prefix='/v2', dependencies=[Depends(require_token)])
 
@@ -134,6 +161,42 @@ def create_router(database, require_token, canonical_course, normalize_phone):
             conn.execute('SELECT access_id FROM public.current_course_access LIMIT 0')
             conn.execute('SELECT course_context_id FROM public.current_course_context LIMIT 0')
         return {'status': 'ok', 'version': 2, 'course_context': 1}
+
+    @router.post('/user-group-data/snapshots')
+    def user_group_data_snapshots(payload: UserGroupBatch):
+        inserted = updated = stale = 0
+        with database() as conn:
+            for record in payload.records:
+                current = conn.execute('''SELECT revision FROM public.user_group_data
+                    WHERE platform=%s AND moodle_user_id=%s AND group_key=%s FOR UPDATE''',
+                    (record.platform, record.moodle_user_id, record.group_key)).fetchone()
+                if current and int(current['revision']) > record.revision:
+                    stale += 1
+                    continue
+                conn.execute('''INSERT INTO public.user_group_data
+                    (platform,moodle_user_id,group_key,revision,username,dni,empresa,cif,inicio,fin,nombrecompleto,
+                     group_id,course_id,observed_at,synced_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
+                    ON CONFLICT(platform,moodle_user_id,group_key) DO UPDATE SET
+                    revision=excluded.revision,username=excluded.username,dni=excluded.dni,empresa=excluded.empresa,
+                    cif=excluded.cif,inicio=excluded.inicio,fin=excluded.fin,nombrecompleto=excluded.nombrecompleto,
+                    group_id=excluded.group_id,course_id=excluded.course_id,observed_at=excluded.observed_at,synced_at=now()
+                    WHERE public.user_group_data.revision <= excluded.revision''',
+                    (record.platform,record.moodle_user_id,record.group_key,record.revision,record.username,
+                     record.dni,record.empresa,record.cif,record.inicio,record.fin,record.nombrecompleto,
+                     record.group_id,record.course_id,record.observed_at))
+                if current:
+                    updated += 1
+                else:
+                    inserted += 1
+        return {'inserted': inserted, 'updated': updated, 'stale': stale}
+
+    @router.delete('/user-group-data/{platform}/{moodle_user_id}')
+    def delete_user_group_data(platform: str, moodle_user_id: int):
+        with database() as conn:
+            result = conn.execute('DELETE FROM public.user_group_data WHERE platform=%s AND moodle_user_id=%s RETURNING id',
+                                  (platform, moodle_user_id)).fetchall()
+        return {'deleted': len(result)}
 
     @router.post('/accounts/snapshot')
     def snapshot(p: Snapshot):

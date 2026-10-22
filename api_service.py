@@ -13,9 +13,72 @@ from course_catalog import COURSE_MAP
 from multicourse import create_router
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
-app = FastAPI(title="Senda Moodle Integration", version="2.1.2")
+app = FastAPI(title="Senda Moodle Integration", version="2.1.3")
+
+
+class RequestBodyLimitMiddleware:
+    """Reject oversized requests before parsing, including chunked request bodies."""
+
+    def __init__(self, app: ASGIApp, max_bytes: int = 64 * 1024 * 1024):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        content_length = next(
+            (value for name, value in scope.get("headers", []) if name.lower() == b"content-length"),
+            None,
+        )
+        if content_length:
+            try:
+                if int(content_length) > self.max_bytes:
+                    await self._too_large(scope, receive, send)
+                    return
+            except ValueError:
+                pass  # The server/framework will reject malformed Content-Length.
+
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                continue
+            chunk = message.get("body", b"")
+            total += len(chunk)
+            if total > self.max_bytes:
+                await self._too_large(scope, receive, send)
+                return
+            chunks.append(chunk)
+            if not message.get("more_body", False):
+                break
+
+        body = b"".join(chunks)
+        delivered = False
+
+        async def replay() -> Message:
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self.app(scope, replay, send)
+
+    @staticmethod
+    async def _too_large(scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse({"detail": "Request body exceeds 64 MiB"}, status_code=413)
+        await response(scope, receive, send)
+
+
+app.add_middleware(RequestBodyLimitMiddleware)
 
 
 @app.exception_handler(RequestValidationError)
