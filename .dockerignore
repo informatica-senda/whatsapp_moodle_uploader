@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 .git/
+.env
+.env.*
+otro/
+tests/
+migrations/
 dist/
 build/
 *.spec

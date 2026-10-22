@@ -8,3 +8,6 @@ dist/
 *.spec
 Subida alumnos moodle.csv
 *.code-workspace
+
+# Material auxiliar local conservado fuera del despliegue
+/otro/
